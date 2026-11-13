@@ -267,6 +267,25 @@ def test_cache_raises_for_nvrtc_name_with_dir_component():
     assert cache.set_calls == []
 
 
+@pytest.mark.human_reviewed
+def test_cache_raises_for_quoted_include_resolved_from_cwd(tmp_path, monkeypatch):
+    """With a name without a directory component NVRTC finds a quoted
+    ``#include`` in the current working directory. Two directories with
+    different ``local.h`` would otherwise share one cache entry, so the second
+    compile would get the first directory's binary."""
+    (tmp_path / "local.h").write_text("#define VALUE 1\n")
+    monkeypatch.chdir(tmp_path)
+    source = '#include "local.h"\nextern "C" __global__ void k(int* p) { *p = VALUE; }\n'
+    program = Program(source, "c++", ProgramOptions(arch="sm_80"))
+    cache = _RecordingCache()
+
+    with pytest.raises(ValueError, match="quoted"):
+        program.compile("ptx", cache=cache)
+
+    assert cache.get_calls == []
+    assert cache.set_calls == []
+
+
 def test_cache_raises_for_side_effect_option(tmp_path):
     """Options with compile-time side effects can't be cached."""
     program = Program(

@@ -197,8 +197,9 @@ cdef class Program:
             would silently miss ``get_kernel(name_expression)`` lookups.
             Options that require an ``extra_digest`` (``include_path``,
             ``pre_include``, ``pch``, ``use_pch``, ``pch_dir``, NVVM
-            ``use_libdevice=True``, or NVRTC ``options.name`` with a
-            directory component) raise ``ValueError`` via
+            ``use_libdevice=True``, NVRTC ``options.name`` with a
+            directory component, or NVRTC source with a quoted ``#include``)
+            raise ``ValueError`` via
             :func:`~cuda.core.utils.make_program_cache_key`; for those
             compiles, use the manual ``make_program_cache_key(...)``
             pattern directly.

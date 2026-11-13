@@ -14,6 +14,7 @@ from __future__ import annotations
 import abc
 import collections.abc
 import hashlib
+import re
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -241,6 +242,10 @@ _EXTERNAL_CONTENT_OPTIONS = (
     "pch_dir",
 )
 
+# A quoted ``#include`` directive, which NVRTC also searches for in the source
+# directory (see ``_NvrtcBackend.validate_code``).
+_QUOTED_INCLUDE_RE = re.compile(rb'^[ \t]*#[ \t]*include[ \t]*"', re.MULTILINE)
+
 # ProgramOptions fields whose compilation effect is not captured in the
 # returned ``ObjectCode`` -- they produce a filesystem artifact as a side
 # effect. A cache hit skips compilation, so that artifact would never be
@@ -368,6 +373,9 @@ class _KeyBackend(abc.ABC):
         mode.
         """
 
+    def validate_code(self, code: bytes, options: ProgramOptions, extra_digest: bytes | None) -> None:  # noqa: B027
+        """Reject source text whose compilation reads inputs the key cannot observe. Default: nothing."""
+
     def hash_extra_payload(self, options: ProgramOptions, update: Callable[[str, bytes], None]) -> None:  # noqa: B027
         """Mix backend-specific extras (e.g. NVVM ``extra_sources`` /
         ``use_libdevice``). Default: nothing.
@@ -424,6 +432,28 @@ class _NvrtcBackend(_KeyBackend):
                     f"#include directives relative to that directory, so a digest "
                     f"covering the headers it may pull in must be supplied."
                 )
+
+    def validate_code(self, code: bytes, options: ProgramOptions, extra_digest: bytes | None) -> None:
+        if extra_digest is not None or _QUOTED_INCLUDE_RE.search(code) is None:
+            return
+        # NVRTC resolves ``#include "x.h"`` against the directory of the source
+        # name. A name without a directory component (the default
+        # ``"default_program"``, ``"foo.cu"``) resolves against the process's
+        # current working directory, so the same source compiled from two
+        # directories can include two different headers. ``Program`` also
+        # adds ``--include-path=<cwd>`` for debug/lineinfo builds of
+        # ``"default_program"``, which ``no_source_include`` does not turn off.
+        cwd_include_path = bool(options.debug or options.lineinfo) and options.name == "default_program"
+        if options.no_source_include and not cwd_include_path:
+            return
+        raise ValueError(
+            "make_program_cache_key() refuses to build a key for NVRTC source with a quoted "
+            "#include without an extra_digest; NVRTC resolves it relative to the source "
+            "directory (the current working directory for a name without a directory "
+            "component), whose headers the key cannot observe. Pass an extra_digest covering "
+            "those headers, or set no_source_include=True if the quoted headers are not read from "
+            "the working directory (not effective for debug/lineinfo builds of default_program)."
+        )
 
     def option_fingerprint(self, options: ProgramOptions, target_type: str) -> list[bytes]:
         # ``ProgramOptions.as_bytes("nvrtc", ...)`` gives the real
@@ -747,7 +777,9 @@ def make_program_cache_key(
     Options that read external files (``include_path``, ``pre_include``,
     ``pch``, ``use_pch``, ``pch_dir``; ``use_libdevice=True`` on the NVVM
     path; and on NVRTC, an ``options.name`` with a directory component,
-    which NVRTC uses for relative-include resolution) require
+    which NVRTC uses for relative-include resolution, or a quoted
+    ``#include`` in the source, which NVRTC also resolves against the current
+    working directory when the name has no directory component) require
     ``extra_digest`` -- fingerprint the bytes the compiler will pull in
     and pass that digest so changes to those files force a cache miss.
     Options that have compile-time side effects (``create_pch``,
@@ -779,6 +811,7 @@ def make_program_cache_key(
     backend.validate(options, target_type, extra_digest)
 
     code_bytes = backend.encode_code(code, code_type)
+    backend.validate_code(code_bytes, options, extra_digest)
     option_bytes = backend.option_fingerprint(options, target_type)
     name_tags = backend.encode_name_expressions(name_expressions)
 

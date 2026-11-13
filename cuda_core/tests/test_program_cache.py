@@ -906,9 +906,62 @@ def test_make_program_cache_key_rejects_nvrtc_name_with_dir_component(name):
     ],
 )
 def test_make_program_cache_key_accepts_nvrtc_name_without_dir_component(name):
-    """Names without a directory component are fine: NVRTC's relative-include
-    resolution doesn't reach outside the in-memory program."""
+    """Names without a directory component are fine for source without a
+    quoted ``#include`` (see the quoted-include tests below)."""
     _make_key(options=_opts(name=name))  # Should not raise.
+
+
+_QUOTED_INCLUDE_SRC = '#include "local.h"\nextern "C" __global__ void k(int* p) { *p = VALUE; }\n'
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("default_program", id="default"),
+        pytest.param("foo.cu", id="bare_filename"),
+    ],
+)
+@pytest.mark.human_reviewed
+def test_make_program_cache_key_rejects_nvrtc_quoted_include(name):
+    """With a name without a directory component, NVRTC resolves a quoted
+    ``#include`` against the current working directory. The key cannot see
+    that header, so the same source compiled from another directory would get
+    this directory's cached binary."""
+    with pytest.raises(ValueError, match="quoted"):
+        _make_key(code=_QUOTED_INCLUDE_SRC, options=_opts(name=name))
+
+
+@pytest.mark.parametrize(
+    ("option_kw", "extra_digest"),
+    [
+        pytest.param({}, b"caller-fingerprint", id="extra_digest"),
+        pytest.param({"no_source_include": True}, None, id="no_source_include"),
+    ],
+)
+@pytest.mark.human_reviewed
+def test_make_program_cache_key_accepts_nvrtc_quoted_include_with_escape_hatch(option_kw, extra_digest):
+    _make_key(code=_QUOTED_INCLUDE_SRC, options=_opts(**option_kw), extra_digest=extra_digest)
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        pytest.param('#include <cuda/std/cstdint>\nextern "C" __global__ void k() {}\n', id="angle_include"),
+        pytest.param('// #include "local.h"\nextern "C" __global__ void k() {}\n', id="commented_out"),
+    ],
+)
+@pytest.mark.human_reviewed
+def test_make_program_cache_key_accepts_nvrtc_source_without_quoted_include(code):
+    _make_key(code=code)  # Should not raise.
+
+
+@pytest.mark.parametrize("debug_kw", [{"debug": True}, {"lineinfo": True}])
+@pytest.mark.human_reviewed
+def test_make_program_cache_key_rejects_nvrtc_quoted_include_debug_even_with_no_source_include(debug_kw):
+    """Program adds ``--include-path=<cwd>`` for debug/lineinfo builds of
+    ``default_program``, which ``no_source_include`` does not remove."""
+    with pytest.raises(ValueError, match="quoted"):
+        _make_key(code=_QUOTED_INCLUDE_SRC, options=_opts(no_source_include=True, **debug_kw))
 
 
 def test_make_program_cache_key_accepts_nvrtc_name_with_dir_when_extra_digest_supplied():
