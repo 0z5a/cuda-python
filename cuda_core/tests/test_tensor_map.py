@@ -714,10 +714,12 @@ class TestTensorMapIm2colWide:
             pytest.skip("Device does not support im2col-wide (requires compute capability 10.0+)")
 
         # Some environments in CI exercise this test module with a cuda.core
-        # build that does not include im2col-wide symbols (CUDA < 13 build),
-        # or with driver/GPU combinations that reject im2col-wide descriptor
-        # encoding for otherwise valid inputs. Probe once per test invocation
-        # and skip only for those known unsupported cases.
+        # build that does not include im2col-wide symbols (CUDA < 13 build).
+        # Probe once per test invocation and skip only for that case. With
+        # INTERLEAVE_NONE the driver requires the inner box
+        # (channels_per_pixel * element size) to fit the swizzle span, 128 B
+        # for the default SWIZZLE_128B, so 32 fp32 channels. A driver error
+        # on these valid inputs is a real failure, not a reason to skip.
         buf = dev.allocate(1 * 32 * 64 * 4, stream=dev.default_stream)
         tensor = _DeviceArray(buf, (1, 32, 64))
         try:
@@ -725,17 +727,13 @@ class TestTensorMapIm2colWide:
                 _as_view(tensor),
                 pixel_box_lower_corner_width=0,
                 pixel_box_upper_corner_width=4,
-                channels_per_pixel=64,
+                channels_per_pixel=32,
                 pixels_per_column=4,
                 data_type=TensorMapDataType.FLOAT32,
             )
         except RuntimeError as e:
             if "requires a CUDA 13+ build" in str(e):
                 pytest.skip("Im2col-wide requires cuda.core built with CUDA 13+")
-            raise
-        except Exception as e:
-            if "CUDA_ERROR_INVALID_VALUE" in str(e):
-                pytest.skip("Im2col-wide unsupported on this driver/GPU combination")
             raise
 
     def test_from_im2col_wide_3d(self, dev, skip_if_no_im2col_wide):
@@ -746,7 +744,7 @@ class TestTensorMapIm2colWide:
             _as_view(tensor),
             pixel_box_lower_corner_width=0,
             pixel_box_upper_corner_width=4,
-            channels_per_pixel=64,
+            channels_per_pixel=32,
             pixels_per_column=4,
             data_type=TensorMapDataType.FLOAT32,
         )
@@ -762,7 +760,7 @@ class TestTensorMapIm2colWide:
             _as_view(tensor),
             pixel_box_lower_corner_width=0,
             pixel_box_upper_corner_width=4,
-            channels_per_pixel=64,
+            channels_per_pixel=32,
             pixels_per_column=16,
         )
         assert desc is not None
@@ -777,10 +775,26 @@ class TestTensorMapIm2colWide:
             _as_view(tensor),
             pixel_box_lower_corner_width=0,
             pixel_box_upper_corner_width=4,
-            channels_per_pixel=64,
+            channels_per_pixel=32,
             pixels_per_column=32,
         )
         assert desc is not None
+
+    @pytest.mark.human_reviewed
+    def test_from_im2col_wide_rejects_inner_box_wider_than_swizzle(self, dev, skip_if_no_im2col_wide):
+        # 64 fp32 channels = 256 B > the 128 B SWIZZLE_128B span: the driver
+        # must reject this. It is the input the old skip probe used.
+        buf = dev.allocate(1 * 32 * 64 * 4, stream=dev.default_stream)
+        tensor = _DeviceArray(buf, (1, 32, 64))
+        with pytest.raises(CUDAError, match="CUDA_ERROR_INVALID_VALUE"):
+            TensorMapDescriptor._from_im2col_wide(
+                _as_view(tensor),
+                pixel_box_lower_corner_width=0,
+                pixel_box_upper_corner_width=4,
+                channels_per_pixel=64,
+                pixels_per_column=4,
+                data_type=TensorMapDataType.FLOAT32,
+            )
 
     def test_from_im2col_wide_rank_validation(self, dev, skip_if_no_im2col_wide):
         buf = dev.allocate(1024 * 4, stream=dev.default_stream)
