@@ -74,7 +74,7 @@ def compile_cubin(kernel_source: str) -> bytes:
     # check for compile errors
     err_log, log_size = nvrtc.nvrtcGetProgramLogSize(prog)
     assert_drv(err_log)
-    log = b" " * log_size
+    log = bytearray(log_size)
     (err_log,) = nvrtc.nvrtcGetProgramLog(prog, log)
     assert_drv(err_log)
     assert_drv(err)
