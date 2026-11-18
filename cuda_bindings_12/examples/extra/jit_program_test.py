@@ -71,7 +71,7 @@ def main():
     # Get log from compilation
     err, logSize = nvrtc.nvrtcGetProgramLogSize(prog)
     ASSERT_DRV(err)
-    log = b" " * logSize
+    log = bytearray(logSize)
     (err,) = nvrtc.nvrtcGetProgramLog(prog, log)
     ASSERT_DRV(err)
     print(log.decode())

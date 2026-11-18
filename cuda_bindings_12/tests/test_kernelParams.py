@@ -41,7 +41,7 @@ def common_nvrtc(allKernelStrings, dev):
 
     err_log, logSize = nvrtc.nvrtcGetProgramLogSize(prog)
     ASSERT_DRV(err_log)
-    log = b" " * logSize
+    log = bytearray(logSize)
     (err_log,) = nvrtc.nvrtcGetProgramLog(prog, log)
     ASSERT_DRV(err_log)
     result = log.decode()
